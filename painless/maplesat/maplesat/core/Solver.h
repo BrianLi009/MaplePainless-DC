@@ -17,20 +17,21 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FO
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 **************************************************************************************************/
+#define UNEMBED_SUBGRAPH_CHECK
 
-#ifndef MapleSAT_Solver_h
-#define MapleSAT_Solver_h
+#ifndef Minisat_Solver_h
+#define Minisat_Solver_h
 
-#include "maplesat/mtl/Vec.h"
-#include "maplesat/mtl/Heap.h"
-#include "maplesat/mtl/Alg.h"
-#include "maplesat/utils/Options.h"
-#include "maplesat/core/SolverTypes.h"
+#include "mtl/Vec.h"
+#include "mtl/Heap.h"
+#include "mtl/Alg.h"
+#include "utils/Options.h"
+#include "core/SolverTypes.h"
 
-#include <vector>
-using namespace std;
+const int firstReduceDB = 2000;
+const int incReduceDB = 300;
 
-namespace MapleSAT {
+namespace Minisat {
 
 //=================================================================================================
 // Solver -- the main class:
@@ -41,7 +42,6 @@ public:
     // Constructor/Destructor:
     //
     Solver();
-    Solver(const Solver& s);
     virtual ~Solver();
 
     // Problem specification:
@@ -55,23 +55,6 @@ public:
     bool    addClause (Lit p, Lit q, Lit r);                    // Add a ternary clause to the solver. 
     bool    addClause_(      vec<Lit>& ps);                     // Add a clause to the solver without making superflous internal copy. Will
                                                                 // change the passed vector 'ps'.
-
-    // Parallel support
-    //
-    void    importClauses();
-    bool    importUnitClauses();
-    vector<int> pickSplittingVariables(int k = 1);
-    Lit      pickBranchLit    ();                                                      // Return the next decision variable.
-
-
-    vec<Lit> importedClause;
-    void *   issuer;												// used as the callback parameter
-
-    // callback for clause learning
-    Lit  (* importUnitCallback)  (void *);
-    bool (* importClauseCallback)(void *, int *, vec<Lit> &);
-    void (* exportClauseCallback)(void *, int, vec<Lit> &);
-
 
     // Solving:
     //
@@ -125,11 +108,17 @@ public:
     void    checkGarbage(double gf);
     void    checkGarbage();
 
+
+    FILE*               output;
+
     // Extra results: (read-only member variable)
     //
     vec<lbool> model;             // If problem is satisfiable, this vector contains the model (if any).
     vec<Lit>   conflict;          // If problem is unsatisfiable (possibly under assumptions),
                                   // this vector represent the final conflict clause expressed in the assumptions.
+#ifdef REMOVE_UNAPPEARING_VARS
+    vec<bool>  appears;
+#endif
 
     // Mode of operation:
     //
@@ -167,9 +156,15 @@ public:
     uint64_t solves, starts, decisions, rnd_decisions, propagations, conflicts;
     uint64_t dec_vars, clauses_literals, learnts_literals, max_literals, tot_literals;
 
-    std::vector<int>            flipActivity;     // Number of flips for each variable.
-
     uint64_t lbd_calls;
+    const char* exhauststring;
+    const char* canonicaloutstring;
+    const char* noncanonicaloutstring;
+    const char* permoutstring;
+    const char* shortoutstring;
+#ifdef UNEMBED_SUBGRAPH_CHECK
+    const char* guboutstring;
+#endif
     vec<uint64_t> lbd_seen;
     vec<uint64_t> picked;
     vec<uint64_t> conflicted;
@@ -187,6 +182,18 @@ public:
 
     vec<long double> total_actual_rewards;
     vec<int> total_actual_count;
+
+    bool use_callback = false;
+    int n = 0; // Number of nodes in graph
+    int zerostoadd = 0; // Number of initial variables to set to false
+
+    long curRestart = 1;
+    int reductions = 0;
+    int nbclausesbeforereduce = firstReduceDB;
+    bool is_canonical(int k, int p[], int& x, int& y, int& i);
+#ifdef UNEMBED_SUBGRAPH_CHECK
+    bool has_gub_subgraph(int k, int* P, int * p, int g);
+#endif
 
 protected:
 
@@ -251,6 +258,7 @@ protected:
     vec<Lit>            analyze_stack;
     vec<Lit>            analyze_toclear;
     vec<Lit>            add_tmp;
+    vec<vec<Lit> >      callbackLearntClauses;
 
     double              max_learnts;
     double              learntsize_adjust_confl;
@@ -265,11 +273,15 @@ protected:
     // Main internal methods:
     //
     void     insertVarOrder   (Var x);                                                 // Insert a variable in the decision order priority queue.
+    Lit      pickBranchLit    ();                                                      // Return the next decision variable.
     void     newDecisionLevel ();                                                      // Begins a new decision level.
     void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef);                         // Enqueue a literal. Assumes value of literal is undefined.
     bool     enqueue          (Lit p, CRef from = CRef_Undef);                         // Test if fact 'p' contradicts current state, enqueue otherwise.
     CRef     propagate        ();                                                      // Perform unit propagation. Returns possibly conflicting clause.
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
+    void     callbackFunction (bool complete, vec<vec<Lit> >& out_learnts);
+    bool     assertingClause  (CRef confl);
+    void     analyze(vec<Lit>& conflvec, vec<Lit>& out_learnt, int& out_btlevel);
     void     analyze          (CRef confl, vec<Lit>& out_learnt, int& out_btlevel);    // (bt = backtrack)
     void     analyzeFinal     (Lit p, vec<Lit>& out_conflict);                         // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
     bool     litRedundant     (Lit p, uint32_t abstract_levels);                       // (helper method for 'analyze()')
